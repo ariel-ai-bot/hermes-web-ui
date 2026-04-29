@@ -615,11 +615,9 @@ export async function getSessionDetailFromDb(sessionId: string): Promise<HermesS
   try {
     const idx = loadAllSessions(db)
     const requested = idx.byId.get(sessionId) || null
-    console.log(requested, 'idx')
     if (!requested) return null
 
     const chain = collectSessionChainForMatchedSession(requested, idx)
-    console.log(chain)
     if (!chain.length) return null
 
     const ids = chain.map(session => session.id)
@@ -644,13 +642,8 @@ export async function getSessionDetailFromDb(sessionId: string): Promise<HermesS
       WHERE session_id IN (${placeholders})
       ORDER BY timestamp, id
     `).all(...ids) as Record<string, unknown>[]
-    console.log(messageRows)
     const messages = messageRows.map(mapMessageRow)
     return aggregateSessionDetail(chain, messages, sessionId)
-  } catch (err) {
-
-    console.log(err)
-    return null
   } finally {
     db.close()
   }
