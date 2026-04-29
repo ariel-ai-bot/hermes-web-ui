@@ -223,15 +223,19 @@ export class ChatRunSocket {
         timestamp: now,
       })
 
-      // Create session in local DB if it doesn't exist (local store only)
-      // Note: addMessage is called later, AFTER conversation_history is loaded,
-      // to avoid duplicating the user message in history.
-      if (useLocalSessionStore()) {
-        if (!getSession(session_id)) {
-          const preview = input.replace(/[\r\n]/g, ' ').substring(0, 100)
-          createSession({ id: session_id, profile, model, title: preview })
-        }
+      // Create session in local DB if it doesn't exist
+      if (!getSession(session_id)) {
+        const preview = input.replace(/[\r\n]/g, ' ').substring(0, 100)
+        createSession({ id: session_id, profile, model, title: preview })
       }
+
+      // Write user message to local DB immediately
+      addMessage({
+        session_id,
+        role: 'user',
+        content: input,
+        timestamp: now,
+      })
 
       socket.join(`session:${session_id}`)
     }
@@ -470,17 +474,6 @@ export class ChatRunSocket {
             }
 
             body.conversation_history = history
-
-            // Write user message to local DB AFTER loading history
-            // so it won't be duplicated in conversation_history
-            if (useLocalSessionStore()) {
-              addMessage({
-                session_id,
-                role: 'user',
-                content: input,
-                timestamp: now,
-              })
-            }
           }
         } catch (err) {
           logger.warn(err, '[chat-run-socket] failed to load conversation history for session %s', session_id)
@@ -727,10 +720,8 @@ export class ChatRunSocket {
           return
         }
 
-        // Skip user messages only if using local store (already written in handleRun)
-        // For Hermes state.db mode, we need to sync user messages too
-        const skipUserMessages = useLocalSessionStore()
-        const toInsert = detail.messages.filter(m => skipUserMessages ? m.role !== 'user' : true)
+        // Skip user messages — already written to local DB in handleRun
+        const toInsert = detail.messages.filter(m => m.role !== 'user')
 
         // Build tool_call_id → function.name lookup from assistant messages
         // (Hermes stores tool_name as NULL, name lives inside tool_calls JSON)
