@@ -271,7 +271,7 @@ export class ChatRunSocket {
               tool_call_id?: string
               name?: string
             }> = detail.messages
-              .filter(m => (m.role === 'user' || m.role === 'assistant' || m.role === 'tool') && m.content !== undefined)
+              .filter(m => (m.role === 'user' || m.role === 'assistant' || m.role === 'tool') && m.content !== undefined && m.timestamp !== now)
               .map(m => {
                 const msg: any = { role: m.role, content: m.content || '' }
                 if (m.tool_calls?.length) msg.tool_calls = m.tool_calls
