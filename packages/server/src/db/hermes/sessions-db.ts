@@ -571,7 +571,43 @@ async function openSessionDb() {
     throw new Error(`node:sqlite requires Node >= 22.5, current: ${process.versions.node}`)
   }
   const { DatabaseSync } = await import('node:sqlite')
+  console.log(`Opening session db: ${sessionDbPath()}`)
   return new DatabaseSync(sessionDbPath(), { open: true, readOnly: true })
+}
+
+/**
+ * Lightweight alternative: get messages + session row for a single session ID
+ * without chain traversal. Used by syncFromHermes for ephemeral sessions.
+ */
+export async function getSessionMessagesFromDb(sessionId: string): Promise<{
+  messages: HermesMessageRow[]
+  session: HermesSessionRow | null
+} | null> {
+  const db = await openSessionDb()
+  try {
+    const sessionRow = db.prepare(`
+      SELECT ${SESSION_SELECT}
+      FROM sessions s
+      WHERE s.id = ?
+    `).get(sessionId) as Record<string, unknown> | undefined
+
+    const messageRows = db.prepare(`
+      SELECT
+        id, session_id, role, content, tool_call_id, tool_calls, tool_name,
+        timestamp, token_count, finish_reason, reasoning, reasoning_details,
+        codex_reasoning_items, reasoning_content
+      FROM messages
+      WHERE session_id = ?
+      ORDER BY timestamp, id
+    `).all(sessionId) as Record<string, unknown>[]
+
+    return {
+      messages: messageRows.map(mapMessageRow),
+      session: sessionRow ? mapRow(sessionRow) : null,
+    }
+  } finally {
+    db.close()
+  }
 }
 
 export async function getSessionDetailFromDb(sessionId: string): Promise<HermesSessionDetailRow | null> {
@@ -579,9 +615,11 @@ export async function getSessionDetailFromDb(sessionId: string): Promise<HermesS
   try {
     const idx = loadAllSessions(db)
     const requested = idx.byId.get(sessionId) || null
+    console.log(requested, 'idx')
     if (!requested) return null
 
     const chain = collectSessionChainForMatchedSession(requested, idx)
+    console.log(chain)
     if (!chain.length) return null
 
     const ids = chain.map(session => session.id)
@@ -606,9 +644,13 @@ export async function getSessionDetailFromDb(sessionId: string): Promise<HermesS
       WHERE session_id IN (${placeholders})
       ORDER BY timestamp, id
     `).all(...ids) as Record<string, unknown>[]
-
+    console.log(messageRows)
     const messages = messageRows.map(mapMessageRow)
     return aggregateSessionDetail(chain, messages, sessionId)
+  } catch (err) {
+
+    console.log(err)
+    return null
   } finally {
     db.close()
   }

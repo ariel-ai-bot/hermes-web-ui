@@ -109,7 +109,14 @@ function extractRunCompletedFromChunk(chunk: string): string | null {
       if (data.event === 'run.completed' && data.usage && data.run_id) {
         const sessionId = getSessionForRun(data.run_id)
         if (sessionId) {
-          updateUsage(sessionId, data.usage.input_tokens, data.usage.output_tokens)
+          updateUsage(sessionId, {
+            inputTokens: data.usage.input_tokens,
+            outputTokens: data.usage.output_tokens,
+            cacheReadTokens: data.usage.cache_read_tokens,
+            cacheWriteTokens: data.usage.cache_write_tokens,
+            reasoningTokens: data.usage.reasoning_tokens,
+            model: data.model || '',
+          })
           return data.run_id
         }
       }

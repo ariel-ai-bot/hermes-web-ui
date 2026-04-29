@@ -10,7 +10,8 @@ import {
   renameSession as localRenameSession,
   useLocalSessionStore,
 } from '../../db/hermes/session-store'
-import { deleteUsage, getUsage, getUsageBatch } from '../../db/hermes/usage-store'
+import { deleteUsage, getUsage, getUsageBatch, getLocalUsageStats } from '../../db/hermes/usage-store'
+import type { LocalUsageStats, UsageStatsModelRow, UsageStatsDailyRow } from '../../db/hermes/usage-store'
 import { getModelContextLength } from '../../services/hermes/model-context'
 import { getActiveProfileName } from '../../services/hermes/hermes-profile'
 import { getGroupChatServer } from '../../routes/hermes/group-chat'
@@ -285,4 +286,113 @@ export async function rename(ctx: any) {
 export async function contextLength(ctx: any) {
   const profile = (ctx.query.profile as string) || undefined
   ctx.body = { context_length: getModelContextLength(profile) }
+}
+
+export async function usageStats(ctx: any) {
+  // 1. Local session_usage (web UI chat runs)
+  const local = getLocalUsageStats()
+
+  // 2. Hermes state.db sessions (exclude api_server source)
+  let hermesSessions: Array<{
+    model: string
+    input_tokens: number
+    output_tokens: number
+    cache_read_tokens: number
+    cache_write_tokens: number
+    reasoning_tokens: number
+    started_at: number
+    estimated_cost_usd: number
+    actual_cost_usd: number | null
+  }> = []
+
+  try {
+    const allSessions = await listSessionSummaries(undefined, 100000)
+    hermesSessions = allSessions.filter(s => s.source !== 'api_server')
+  } catch (err) {
+    logger.warn(err, 'usageStats: failed to load Hermes sessions')
+  }
+
+  // Aggregate Hermes sessions
+  const hModelMap = new Map<string, UsageStatsModelRow>()
+  const hDayMap = new Map<string, UsageStatsDailyRow>()
+  let hInput = 0, hOutput = 0, hCacheRead = 0, hCacheWrite = 0, hReasoning = 0, hSessions = 0, hCost = 0
+
+  for (const s of hermesSessions) {
+    const iTokens = s.input_tokens || 0
+    const oTokens = s.output_tokens || 0
+    const crTokens = s.cache_read_tokens || 0
+    const cwTokens = s.cache_write_tokens || 0
+    const rTokens = s.reasoning_tokens || 0
+    const cost = s.actual_cost_usd ?? s.estimated_cost_usd ?? 0
+    const model = s.model || ''
+
+    hInput += iTokens; hOutput += oTokens; hCacheRead += crTokens
+    hCacheWrite += cwTokens; hReasoning += rTokens; hCost += cost
+    hSessions++
+
+    // By model
+    const me = hModelMap.get(model) || { model, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, sessions: 0 }
+    me.input_tokens += iTokens; me.output_tokens += oTokens; me.cache_read_tokens += crTokens
+    me.cache_write_tokens += cwTokens; me.reasoning_tokens += rTokens; me.sessions++
+    hModelMap.set(model, me)
+
+    // By day (last 30 days)
+    const d = new Date(s.started_at * 1000)
+    const key = d.toISOString().slice(0, 10)
+    if (d.getTime() > Date.now() - 30 * 24 * 60 * 60 * 1000) {
+      const de = hDayMap.get(key) || { date: key, tokens: 0, cache: 0, sessions: 0, cost: 0 }
+      de.tokens += iTokens + oTokens; de.cache += crTokens; de.sessions++; de.cost += cost
+      hDayMap.set(key, de)
+    }
+  }
+
+  // Merge local + Hermes
+  const totalInput = local.input_tokens + hInput
+  const totalOutput = local.output_tokens + hOutput
+  const totalCacheRead = local.cache_read_tokens + hCacheRead
+  const totalCacheWrite = local.cache_write_tokens + hCacheWrite
+  const totalReasoning = local.reasoning_tokens + hReasoning
+  const totalSessions = local.sessions + hSessions
+  const totalCost = hCost // local has no cost data
+
+  // Merge by_model
+  const modelMap = new Map<string, UsageStatsModelRow>()
+  for (const m of [...local.by_model, ...hModelMap.values()].filter(m => m.model)) {
+    const existing = modelMap.get(m.model)
+    if (existing) {
+      existing.input_tokens += m.input_tokens; existing.output_tokens += m.output_tokens
+      existing.cache_read_tokens += m.cache_read_tokens; existing.cache_write_tokens += m.cache_write_tokens
+      existing.reasoning_tokens += m.reasoning_tokens; existing.sessions += m.sessions
+    } else {
+      modelMap.set(m.model, { ...m })
+    }
+  }
+
+  // Merge by_day
+  const dayMap = new Map<string, UsageStatsDailyRow>()
+  // Initialize last 30 days
+  const now = new Date()
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now); d.setDate(d.getDate() - i)
+    const key = d.toISOString().slice(0, 10)
+    dayMap.set(key, { date: key, tokens: 0, cache: 0, sessions: 0, cost: 0 })
+  }
+  for (const d of [...local.by_day, ...hDayMap.values()]) {
+    const existing = dayMap.get(d.date)
+    if (existing) {
+      existing.tokens += d.tokens; existing.cache += d.cache; existing.sessions += d.sessions; existing.cost += d.cost
+    }
+  }
+
+  ctx.body = {
+    total_input_tokens: totalInput,
+    total_output_tokens: totalOutput,
+    total_cache_read_tokens: totalCacheRead,
+    total_cache_write_tokens: totalCacheWrite,
+    total_reasoning_tokens: totalReasoning,
+    total_sessions: totalSessions,
+    total_cost: totalCost,
+    model_usage: [...modelMap.values()].sort((a, b) => (b.input_tokens + b.output_tokens) - (a.input_tokens + a.output_tokens)),
+    daily_usage: [...dayMap.values()],
+  }
 }
