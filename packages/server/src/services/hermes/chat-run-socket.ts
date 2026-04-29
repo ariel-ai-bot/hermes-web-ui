@@ -207,13 +207,14 @@ export class ChatRunSocket {
       ? `eph_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
       : undefined
 
+    const now = Math.floor(Date.now() / 1000)
+
     // Mark working immediately on run start, and append user message
     if (session_id) {
       const state = this.getOrCreateSession(session_id)
       state.isWorking = true
       state.hermesSessionId = hermesSessionId
       state.profile = profile
-      const now = Math.floor(Date.now() / 1000)
       state.messages.push({
         id: state.messages.length + 1,
         session_id,
@@ -223,17 +224,13 @@ export class ChatRunSocket {
       })
 
       // Create session in local DB if it doesn't exist (local store only)
+      // Note: addMessage is called later, AFTER conversation_history is loaded,
+      // to avoid duplicating the user message in history.
       if (useLocalSessionStore()) {
         if (!getSession(session_id)) {
           const preview = input.replace(/[\r\n]/g, ' ').substring(0, 100)
           createSession({ id: session_id, profile, model, title: preview })
         }
-        addMessage({
-          session_id,
-          role: 'user',
-          content: input,
-          timestamp: now,
-        })
       }
 
       socket.join(`session:${session_id}`)
@@ -473,6 +470,17 @@ export class ChatRunSocket {
             }
 
             body.conversation_history = history
+
+            // Write user message to local DB AFTER loading history
+            // so it won't be duplicated in conversation_history
+            if (useLocalSessionStore()) {
+              addMessage({
+                session_id,
+                role: 'user',
+                content: input,
+                timestamp: now,
+              })
+            }
           }
         } catch (err) {
           logger.warn(err, '[chat-run-socket] failed to load conversation history for session %s', session_id)
@@ -693,7 +701,6 @@ export class ChatRunSocket {
         .reduce((sum, m) => sum + countTokens(m.content || ''), 0)
       state.inputTokens = inputTokens
       state.outputTokens = outputTokens
-      updateUsage(sid, inputTokens, outputTokens)
       emit('usage.updated', {
         event: 'usage.updated',
         session_id: sid,
