@@ -727,8 +727,10 @@ export class ChatRunSocket {
           return
         }
 
-        // Skip user messages — already written to local DB in handleRun
-        const toInsert = detail.messages.filter(m => m.role !== 'user')
+        // Skip user messages only if using local store (already written in handleRun)
+        // For Hermes state.db mode, we need to sync user messages too
+        const skipUserMessages = useLocalSessionStore()
+        const toInsert = detail.messages.filter(m => skipUserMessages ? m.role !== 'user' : true)
 
         // Build tool_call_id → function.name lookup from assistant messages
         // (Hermes stores tool_name as NULL, name lives inside tool_calls JSON)
