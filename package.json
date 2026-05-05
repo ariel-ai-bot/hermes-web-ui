@@ -64,6 +64,7 @@
   "dependencies": {
     "eventsource": "^4.1.0",
     "js-tiktoken": "^1.0.21",
+    "kokoro-js": "^1.2.1",
     "node-pty": "^1.1.0",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3"

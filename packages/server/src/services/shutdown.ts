@@ -8,6 +8,11 @@ export function bindShutdown(server: any, groupChatServer?: any, chatRunServer?:
     isShuttingDown = true
 
     logger.info('Shutting down (%s)...', signal)
+    const forceExit = setTimeout(() => {
+      logger.warn('Shutdown timed out, forcing exit')
+      process.exit(0)
+    }, 3000)
+    forceExit.unref()
 
     try {
       // Close ChatRunSocket first to abort all active runs and close EventSource connections
@@ -24,17 +29,23 @@ export function bindShutdown(server: any, groupChatServer?: any, chatRunServer?:
       }
 
       if (server) {
+        server.closeIdleConnections?.()
         await new Promise<void>((resolve) => {
           server.close(() => {
             logger.info('HTTP server closed')
             resolve()
           })
+          setTimeout(() => {
+            server.closeAllConnections?.()
+            resolve()
+          }, 1000).unref()
         })
       }
     } catch (err) {
       logger.error(err, 'Shutdown error')
     }
 
+    clearTimeout(forceExit)
     process.exit(0)
   }
 
