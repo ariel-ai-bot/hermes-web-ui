@@ -250,11 +250,15 @@ async function handleBatchDelete() {
   try {
     const result = await batchDeleteSessions(ids);
     if (result.deleted > 0) {
-      // Remove from store and clean up pinned sessions
+      // Remove from pinned sessions
       for (const id of ids) {
         sessionBrowserPrefsStore.removePinned(id);
-        chatStore.deleteSession(id);
       }
+
+      // Remove deleted sessions from local store (without calling API again)
+      // Use loadSessions to refresh from server instead of manual filtering
+      await chatStore.loadSessions();
+
       message.success(t("chat.batchDeleteSuccess", { count: result.deleted }));
       if (result.failed > 0) {
         message.warning(t("chat.batchDeletePartial", { failed: result.failed }));
